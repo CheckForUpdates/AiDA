@@ -1,0 +1,174 @@
+name: Test Build and Release
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+    tags:
+      - "test-v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install openssl --no-progress -y
+
+      - name: Fetch IDA SDK archive
+        env:
+          IDASDK_ARCHIVE_URL: ${{ secrets.IDASDK_ARCHIVE_URL }}
+          IDASDK_ARCHIVE_AUTH_HEADER: ${{ secrets.IDASDK_ARCHIVE_AUTH_HEADER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${IDASDK_ARCHIVE_URL:-}" ]; then
+            echo "Missing required secret: IDASDK_ARCHIVE_URL"
+            exit 1
+          fi
+
+          ARCHIVE="$RUNNER_TEMP/idasdk.zip"
+          if [ -n "${IDASDK_ARCHIVE_AUTH_HEADER:-}" ]; then
+            curl -fsSL -H "$IDASDK_ARCHIVE_AUTH_HEADER" "$IDASDK_ARCHIVE_URL" -o "$ARCHIVE"
+          else
+            curl -fsSL "$IDASDK_ARCHIVE_URL" -o "$ARCHIVE"
+          fi
+          echo "IDASDK_ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Extract IDA SDK (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXTRACT_DIR="$RUNNER_TEMP/idasdk"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$IDASDK_ARCHIVE" -d "$EXTRACT_DIR"
+
+          if [ -d "$EXTRACT_DIR/include" ] && [ -d "$EXTRACT_DIR/lib" ]; then
+            echo "IDASDK=$EXTRACT_DIR" >> "$GITHUB_ENV"
+          else
+            ROOT="$(find "$EXTRACT_DIR" -maxdepth 3 -type d -name include | head -n1 | xargs dirname)"
+            if [ -z "$ROOT" ] || [ ! -d "$ROOT/lib" ]; then
+              echo "Could not locate IDA SDK root in archive"
+              exit 1
+            fi
+            echo "IDASDK=$ROOT" >> "$GITHUB_ENV"
+          fi
+
+      - name: Extract IDA SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $extractDir = Join-Path $env:RUNNER_TEMP "idasdk"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          Expand-Archive -Path $env:IDASDK_ARCHIVE -DestinationPath $extractDir -Force
+
+          $root = $null
+          if ((Test-Path (Join-Path $extractDir "include")) -and (Test-Path (Join-Path $extractDir "lib"))) {
+            $root = $extractDir
+          } else {
+            $includeDir = Get-ChildItem -Path $extractDir -Directory -Recurse |
+              Where-Object { $_.Name -eq "include" } |
+              Select-Object -First 1
+            if ($includeDir) {
+              $candidate = $includeDir.Parent.FullName
+              if (Test-Path (Join-Path $candidate "lib")) {
+                $root = $candidate
+              }
+            }
+          }
+
+          if (-not $root) {
+            Write-Error "Could not locate IDA SDK root in archive"
+          }
+
+          "IDASDK=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DIDASDK="$IDASDK" -DUSE_QT=OFF
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $opensslRoot = "C:\Program Files\OpenSSL-Win64"
+          cmake -S . -B build -A x64 -DIDASDK="$env:IDASDK" -DUSE_QT=OFF -DOPENSSL_ROOT_DIR="$opensslRoot"
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build build --parallel
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release --parallel
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            PLUGIN_PATH="build/AiDA.so"
+          else
+            PLUGIN_PATH="build/Release/AiDA.so"
+            if [ ! -f "$PLUGIN_PATH" ]; then
+              PLUGIN_PATH="build/AiDA.so"
+            fi
+          fi
+
+          if [ ! -f "$PLUGIN_PATH" ]; then
+            echo "Built plugin not found: $PLUGIN_PATH"
+            exit 1
+          fi
+
+          cp "$PLUGIN_PATH" "dist/AiDA.so"
+          (cd dist && zip -q "AiDA-test-${{ runner.os }}.zip" "AiDA.so")
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AiDA-test-${{ runner.os }}
+          path: dist/AiDA-test-${{ runner.os }}.zip
+
+  release:
+    name: Publish Test Pre-release
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/test-v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Publish GitHub pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: release-assets/**/*.zip

@@ -1,31 +1,72 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+
+# Generic binaries / objects
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exp
+*.pdb
+*.ipdb
+*.iobj
+*.ilk
+
+# Logs and temporary files
+*.log
+*.tlog
+*.tmp
+*.cache
+
+# Visual Studio / MSBuild
+.vs/
+*.suo
+*.VC.db
+*.VC.opendb
+*.user
+*.userosscache
+*.sln.docstates
+ipch/
+
+# Qt generated files
+.moc/
+*.moc
+qrc_*.cpp
+moc_*.cpp
+ui_*.h
+
+# Project-specific generated output
+AiDA/.vs/
+AiDA/x64/
+AiDA/AiDA/x64/
+AiDA/AiDA/*.log
+AiDA/AiDA/preprocessed.i
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+AiDA/AiDA/AiDA/x64/
+
+# Python cache (if helper scripts are added)
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Visual Studio
-.vs/
-*.user
-*.suo
-*.sdf
-*.opensdf
-*.vcxproj.user
-bin/
-obj/
-Debug/
-Release/
-x64/
-*.log
-
-# CMake / Linux Build
-build/
-.cache
-compile_commands.json
-
-# just in case
+# Local runtime config
 ai_assistant.cfg
